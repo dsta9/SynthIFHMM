@@ -20,6 +20,7 @@
 - SAMtools
 - Minimap2
 - BCFTools
+- htslib
 
 Doporučená instalace bioinformatických nástrojů je pomocí Condy (`conda-forge` + `bioconda`).
 
@@ -50,7 +51,11 @@ pip install biopython numpy pandas matplotlib hmmlearn
 ## Instalace bioinformatických nástrojů
 
 ```bash
-conda install -c bioconda -c conda-forge pbsim3 samtools minimap2 bcftools
+conda install -c conda-forge htslib
+conda install -c bioconda bcftools
+conda install -c bioconda samtools
+conda install -c biocodna pbsim3
+conda install -c bioconda minimap2
 ```
 
 ---
@@ -64,7 +69,7 @@ python synthIF.py
 ```
 
 V kořenovém adresáři musí být přítomen:
-- `SynthIF.py`
+- `synthIF.py`
 - `config.ini`
 
 ---
