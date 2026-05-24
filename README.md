@@ -60,7 +60,7 @@ conda install -c bioconda -c conda-forge pbsim3 samtools minimap2 bcftools
 Projekt se spouští pomocí:
 
 ```bash
-python SynthIF.py
+python synthIF.py
 ```
 
 V kořenovém adresáři musí být přítomen:
