@@ -1,76 +1,81 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[18]:
+# In[2]:
 
 
-import xml.etree.ElementTree as ET #parsování XML
+import xml.etree.ElementTree as ET #parse XML
 import Bio #biopython
-from Bio import SeqIO #parsování fasta souborů
-from Bio.SeqRecord import SeqRecord
+from Bio import SeqIO #parsing fasta souborů
+from Bio.SeqRecord import SeqRecord #práce s FASTA hlavičkami
 from Bio import Align #pairwise aligner
 import re #regex
 import subprocess #spouštění shell skriptů z prostředí pythonu
 import os #přístup k funkcím operačního systému z pythonu
-import random                                      
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from hmmlearn import hmm
-import configparser
+import random  #RNG
+import matplotlib.pyplot as plt # grafy
+import numpy as np #matematika
+import pandas as pd #tabulky
+from hmmlearn import hmm #HMM
+import configparser #konfigurační soubory
 
 
-# In[19]:
+# In[3]:
 
 
-#konfigurace
+# načtení konfigurace
 config = configparser.ConfigParser()
 config.sections()
 config.read('config.ini')
-#geny
+#načtení zvolených genů
 genes=[]
 for gene, value in config['GENES'].items():
     if config['GENES'].getboolean(gene):
         genes.append(gene.upper())
 
 
-# In[20]:
+# In[4]:
 
 
 #GENEROVÁNÍ DAT - VYGENERUJE FASTA SOUBOR OBSAHUJÍCÍ ZVOLENÉ KIR GENY
 
 
-output_file = "./outputTemp/geneSampleHT.fasta"
+output_file = "./outputTemp/geneSampleHT.fasta" #výstupní soubor
 
-sequence = ""
+sequence = ""  #výstupy k exportu
 
-for gene in genes:
+for gene in genes:    #pro každý zvolený gen zařadí jeho sekvenci do balíku
     filename = f"sampleRefs/{gene}.fasta"
 
     for record in SeqIO.parse(filename, "fasta"):
         sequence += str(record.seq)
 
 with open(output_file, "w") as f:
-    f.write(">KIRpack\n")
+    f.write(">KIRpack\n")   #sekvnce se dočasně jmenuje KIRpack
     f.write(sequence + "\n")
 
 
-# In[21]:
+# In[60]:
 
 
 #GENEROVÁNÍ READŮ - PBSIM3
 
-pbsim = subprocess.run('pbsim --strategy wgs --method errhmm --errhmm ~/miniconda3/data/ERRHMM-SEQUEL.model --genome ~/SynthIF_folder/outputTemp/geneSampleHT.fasta --depth 60 --length-mean 1429 --pass-num 10 --prefix ~/SynthIF_folder/outputTemp/reads', shell=True)
+#parametry generátoru
+depth = config['PBSIM']['depth'] #průměrná hloubka pokrytí
+length = config['PBSIM']['length'] #průměrná délka readu
+
+#spuštění generátoru modelbased sim, HMM model chyby, params
+pbsim = subprocess.run('pbsim --strategy wgs --method errhmm --errhmm ~/miniconda3/data/ERRHMM-SEQUEL.model --genome ~/SynthIF_folder/outputTemp/geneSampleHT.fasta --depth '+str(depth)+' --length-mean '+str(length)+' --pass-num 10 --prefix ~/SynthIF_folder/outputTemp/reads', shell=True)
 
 
-# In[22]:
+# In[61]:
 
 
 #PŘEVOD NA FASTQ KVŮLI MINIMAP2 VSTUPU
 samtools1 = subprocess.run('samtools fastq ~/SynthIF_folder/outputTemp/reads_0001.bam > ~/SynthIF_folder/outputTemp/reads.fastq', shell=True)
 
 
-# In[23]:
+# In[62]:
 
 
 #ZAROVNÁNÍ - MINIMAP2
@@ -78,6 +83,8 @@ samtools1 = subprocess.run('samtools fastq ~/SynthIF_folder/outputTemp/reads_000
 output_file = "./outputTemp/mappingRef.fasta"
 
 sequence = ""
+
+#na základě apriorní znalosti zvolených genů se z referenčních sekvencí sestaví předloha pro zarovnání
 
 for gene in genes:
     filename = f"mappingRefs/{gene}.fasta"
@@ -89,25 +96,26 @@ with open(output_file, "w") as f:
     f.write(">KIRpack\n")
     f.write(sequence + "\n")
 
+#spuštění MINIMAP s nastavenými parametry pro PacBio
 
 minimap = subprocess.run('minimap2 -ax map-pb ~/SynthIF_folder/outputTemp/mappingRef.fasta ~/SynthIF_folder/outputTemp/reads.fastq > ~/SynthIF_folder/outputTemp/align.sam', shell=True)
 
 
-# In[24]:
+# In[63]:
 
 
 #SORTING
 samtoolssort = subprocess.run('samtools sort ~/SynthIF_folder/outputTemp/align.sam -o ~/SynthIF_folder/outputTemp/align.sorted.bam', shell=True)
 
 
-# In[25]:
+# In[64]:
 
 
 #INDEXACE
 samtoolsindex = subprocess.run('samtools index ~/SynthIF_folder/outputTemp/align.sorted.bam', shell=True)
 
 
-# In[26]:
+# In[65]:
 
 
 #KONSENZUÁLNÍ SEKVENCE - BCFTOOLS
@@ -117,14 +125,14 @@ bcf_idx = subprocess.run('bcftools index ~/SynthIF_folder/outputTemp/calls.vcf.g
 bcf_cons = subprocess.run('bcftools consensus -f ~/SynthIF_folder/outputTemp/mappingRef.fasta ~/SynthIF_folder/outputTemp/calls.vcf.gz > ~/SynthIF_folder/outputTemp/consensus.fa', shell=True)
 
 
-# In[27]:
+# In[5]:
 
 
 #SIMULACE IDENTIFIKACE PŘÍTOMNÝCH GENŮ
 lengths=[]
 for gene in genes:
     filename = f"mappingRefs/{gene}.fasta"
-    for record in SeqIO.parse(filename, "fasta"):  #zajištění délek referenčních sekvencí, vůči kterým bylo zarovnáno
+    for record in SeqIO.parse(filename, "fasta"):  #zajištění délek referenčních sekvencí, vůči kterým bylo zarovnáno (protože apriorní info je k dispozici)
         lengths.append(len(record.seq))
 
 # načtení spojené sekvence
@@ -138,36 +146,39 @@ start = 0
 for gene, length in zip(genes, lengths):
     end = start + length
 
-    part_seq = sequence[start:end].upper()
+    part_seq = sequence[start:end].upper() #zjištěný úsek se musí převést na velká písmena
 
-    new_record = SeqRecord(
+    new_record = SeqRecord(   #knihovna SeqRecord vytvoří genomický fasta soubor pomocí konstruktoru
         part_seq,
         id=gene,
         description=""
     )
 
-    new_records.append(new_record)
+    new_records.append(new_record)   #přidání záznamu do souboru již "rozpoznaných" KIR
     start = end
 
 
-SeqIO.write(new_records, "./outputTemp/split.fasta", "fasta")
+SeqIO.write(new_records, "./outputTemp/split.fasta", "fasta") #export do souboru SPLIT
 
 
-# In[28]:
+# In[6]:
 
 
 targets=[]
-pattern = r"KIR\d+D[LS]\d+[AB]?"
-targets_available=[]
+pattern = r"KIR\d+D[LS]\d+[AB]?" #vyhledá se konkrétní patern začínající KIR, následuje číslo, písmeno D, pak L, nebo S, dále může následovat A, nebo B
+targets_available=[] #pole dostupných genů v sekvenci
 for record in SeqIO.parse("./outputTemp/split.fasta", "fasta"): #načtení popsaného balíku KIR (fasta)
   targets.append(record.seq)
   match = re.search(pattern, record.description)
   if match:
-    targets_available.append(match.group(0))
+    targets_available.append(match.group(0))  #ukládání do výstupního pole validních cílů
 
 
-# In[29]:
+# In[7]:
 
+
+#INPUTS: index genu uloženého v poli validních cílů
+#OUTS: použitá reference, pole získaných exonů, best (výstup z Pairwise aligner), transkript_id (název genu, kterému patří exony) 
 
 def extract_exons(target_idx):
     target_test=targets[target_idx] #výběr jednoho KIR z balíku (sekvence)
@@ -223,123 +234,100 @@ def extract_exons(target_idx):
     return reference, exony, best, transcript_id
 
 
-# In[33]:
+# In[8]:
 
 
 #TRÉNOVÁNÍ A SIMULACE HMM
+#INPUTS: index genu v poli validních cílů, pole exonů předané z metody extract_exons, počet komponent HMM (z konfigu, nebo není-li předáno, nastavuje se 8)
+#OUTPUTS: rd (pole unikátních generovaných posloupností), serazene (pole dvojic posloupnost tokenů/absolutní četnost seřazené sestupně), opakovani (počet simulací)
+
+
+
 def simul_hmm(target_idx, exony, n_components=8):
-    gene=targets_available[target_idx]
+    gene = targets_available[target_idx] #nastavení aktuálně zpracovávaného záznamu
 
-    df=pd.read_csv("exonsBase/trSeq.csv")
+    df = pd.read_csv("exonsBase/trSeq.csv") #načtení trénovacích množin
 
-    sekvence_train = (
+    sekvence_train = (   
         df[gene]
         .dropna()
         .astype(str)
         .tolist()
     )
 
-    X = np.concatenate([ #převod na 0/1
+    # převod I/S na 0/1
+    X = np.concatenate([
         np.array([0 if c == "I" else 1 for c in seq])
         for seq in sekvence_train
     ]).reshape(-1, 1)
 
     lengths = [len(seq) for seq in sekvence_train]
 
-    model = hmm.CategoricalHMM(  #diskrétní emise
-        n_components=n_components,     # počet skrytých stavů
-        n_iter=100,
-        random_state=5
+    model = hmm.CategoricalHMM(  #vytvoření modelu pomocí hmmLearn
+        n_components=n_components,
+        n_iter=config.getint('PARAMETERS', 'trIter'),   #počet iterací se načte z konfigu
+        random_state=5    #seed
     )
-    model.fit(X, lengths)
-    pi = model.startprob_
 
-    P = model.transmat_
+    model.fit(X, lengths)   #trénování modelu (reestimace parametrů A, B, pi)
 
-    E = model.emissionprob_
+    pocty = {} #četnosti výstupů
 
-    pocty = {}
+    opakovani = config.getint('PARAMETERS', 'opakovani')  #počet simulací
+    kroky = lengths[0] #počet časových okamžiků HMM
 
-    opakovani = 100000
-    kroky = lengths[0]
     for pokus in range(opakovani):
+        # simulace pomocí hmmlearn
+        X_gen, Z_gen = model.sample(kroky)
 
-        # výběr počátečního skrytého stavu podle pi
-        r = random.random()
-        soucet = 0
+        # převod 0/1 na tokeny I/S
+        vystup = "".join("I" if x[0] == 0 else "S" for x in X_gen)
 
-        for i in range(kroky):
-            soucet += pi[i]
-            if r < soucet:
-                stav = i
-                break
+        pocty[vystup] = pocty.get(vystup, 0) + 1
 
-        vystup = ""
-
-        for i in range(kroky):
-            # emise
-            r = random.random()  #náhodné číslo z uniformního rozdělení (0-1)
-            if r < E[stav][0]:   #rozhodnutí mezi emitujícím stavem I/S - pokud je gen. číslo menší než ppst emise I, pak se emituje S
-                vystup = vystup + "I"  #uloží I do sekvence stavů
-            else:
-                vystup = vystup + "S"  #jinak do sekvence uloží S
-
-            # přechod do dalšího stavu
-            r = random.random()    #náh. číslo
-            soucet = 0    #proměnná pro hranici intervalu
-
-            for novy_stav in range(8):
-                soucet = soucet + P[stav][novy_stav]  #pravděpodobnost přechodu ze stavu stav do novy_stav - radek-sloupec matice P
-                if r < soucet:  #testuji postupně všechny hranice pro vstup do daného stavu (transition FW, BW, self) - jiné stavy než propojené zajištěné nulou v matici přechodů
-                    stav = novy_stav 
-                    break #pokud se přejde do nového stavu, zastav a opakuj rozhodnutí o emisi
-
-        if vystup in pocty:  #pokud je výstupní sekvence emitujících stavů v poli výstup, přičti počet
-            pocty[vystup] = pocty[vystup] + 1
-        else:  #pokud ne, pak zaveď nový a nastav počet na 1
-            pocty[vystup] = 1
-
-    #print("Počty jednotlivých posloupností:")  #výpisy
-    serazene = sorted(pocty.items(), key=lambda x: x[1], reverse=True)
+    serazene = sorted(pocty.items(), key=lambda x: x[1], reverse=True) #řazení podle četnosti sestupně
 
     for posloupnost, pocet in serazene:
-        pravdepodobnost = pocet/opakovani
+        pravdepodobnost = pocet / opakovani
         print(posloupnost, ":", pocet, pravdepodobnost)
 
-    rd=[posloupnost[0] for posloupnost in serazene]
+    rd = [posloupnost[0] for posloupnost in serazene]
 
-    #print(rd)
     return rd, serazene, opakovani
 
 
-# In[31]:
+# In[9]:
 
+
+#INPUTS: gene (zpracovávaný gen), rd, serazene, exony, opakovani (viz výše)
+#OUTPUTS: finální výstup v souboru fasta 
 
 def export(gene, rd, serazene, exony, opakovani):
-    output=[]
+    output=[] #proměnná pro uložení výstupních informací
 
     for cd in rd:
         newIF=[]
         idx=0
         for idx, sym in enumerate(cd):
             if sym=="I":
-                newIF.append(exony[idx])
+                newIF.append(exony[idx])   #substituce tokenů I za příslušný exon daného genu v závislosti na jeho pořadí, pokud je token S, pak se přeskočí
 
-        output.append(newIF)
+        output.append(newIF)  #řetězení exonů = vznik izoformy
 
     with open(f"outputs/isoforms{gene}.fasta", "w") as f:
         for i, outer in enumerate(output, start=1):
             m = "".join(str(seq) for seq in outer)
             pravdepodobnost = serazene[i-1][1]/opakovani
 
-            f.write(f">{gene}_{i}_{pravdepodobnost}\n")
+            f.write(f">{gene}_{i}_{pravdepodobnost}\n") #zápis do fasta souboru
             f.write(m + "\n")
 
 
-# In[32]:
+# In[10]:
 
 
 results={}
+#pro každý gen dle konfigurace se volá metoda extract_exons, předání výstupů do metody simul_hmm, uložení do prom. results, která se předá jako parametr metodě export
 for target_idx in range(len(targets)):
     reference, exony, best, gene = extract_exons(target_idx)
     rd, serazene, opakovani = simul_hmm(target_idx, exony, config.getint('PARAMETERS', 'hmmComponents'))
@@ -353,12 +341,6 @@ for target_idx in range(len(targets)):
 
 
     export(gene, rd, serazene, exony, opakovani)
-
-
-
-
-# In[ ]:
-
 
 
 
